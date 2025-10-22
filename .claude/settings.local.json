@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir)",
+      "Bash(move diagnose_beta_sampling.py fund_simulation )",
+      "Bash(move diagnose_reporting.py fund_simulation )",
+      "Bash(move verify_reconstruction_math.py fund_simulation)",
+      "Bash(python:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

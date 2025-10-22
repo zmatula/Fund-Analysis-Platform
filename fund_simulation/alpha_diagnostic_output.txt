@@ -1,0 +1,226 @@
+
+====================================================================================================
+                              COMPREHENSIVE ALPHA ACCURACY DIAGNOSTIC                               
+====================================================================================================
+
+This script will investigate 5 potential root causes for low alpha values:
+1. Beta Decomposition Formula Error
+2. Double-Counting of Fees/Costs
+3. Time Period Mismatch
+4. Statistical Sampling Bias
+5. Reconstruction Math Error
+
+====================================================================================================
+LOADING DATA...
+====================================================================================================
+
+Loading investments from: temp_upload.csv
+OK - Loaded 107 investments
+
+Loading beta index from: temp_beta_upload.csv
+OK - Loaded 124 beta prices (frequency: quarterly)
+
+====================================================================================================
+                             ROOT CAUSE #1: BETA DECOMPOSITION FORMULA                              
+====================================================================================================
+
+Testing decomposition on sample investments...
+Total investments: 107
+Beta index date range: 1994-12-31 to 2025-09-30
+Beta index observations: 124
+
+Successfully decomposed: 107 investments
+Skipped (outside beta range): 0 investments
+
+================================================================================
+DISTRIBUTION COMPARISON: Original Total Returns vs Alpha Returns
+================================================================================
+
+Metric                         Original Total       Alpha Only           Difference          
+------------------------------------------------------------------------------------------
+Mean MOIC                                   2.2682              1.5300             +0.7382
+Median MOIC                                 1.8044              1.2261             +0.5783
+Std Dev MOIC                                1.8852              1.2425             +0.6427
+
+Mean IRR                                   31.97%             15.60%            +16.37%
+Median IRR                                 21.09%              8.03%            +13.06%
+Std Dev IRR                                49.18%             38.32%            +10.86%
+
+================================================================================
+DECOMPOSITION DIAGNOSTICS
+================================================================================
+Mean historical beta IRR: 13.58%
+Median historical beta IRR: N/A
+
+================================================================================
+SAMPLE INVESTMENT DECOMPOSITION DETAILS (First 5 investments)
+================================================================================
+
+Investment #1: Alibaba Group
+  Entry: 2011-04-20, Exit: 2015-03-23, Days: 1433
+  Original Total MOIC: 12.3823x, IRR: 89.83%
+  Alpha MOIC: 8.5988x, IRR: 73.05%
+  Implied Beta MOIC: 1.4400x (should equal market return^beta)
+
+Investment #2: Bazaarvoice
+  Entry: 2011-07-20, Exit: 2014-09-10, Days: 1148
+  Original Total MOIC: 0.8850x, IRR: -3.81%
+  Alpha MOIC: 0.6138x, IRR: -14.38%
+  Implied Beta MOIC: 1.4418x (should equal market return^beta)
+
+Investment #3: Branding Brand
+  Entry: 2012-08-31, Exit: 2021-04-19, Days: 3153
+  Original Total MOIC: 0.2476x, IRR: -14.92%
+  Alpha MOIC: 0.0662x, IRR: -26.98%
+  Implied Beta MOIC: 3.7391x (should equal market return^beta)
+
+Investment #4: DrillingInfo
+  Entry: 2012-02-29, Exit: 2018-07-14, Days: 2327
+  Original Total MOIC: 3.4388x, IRR: 21.38%
+  Alpha MOIC: 1.5194x, IRR: 6.79%
+  Implied Beta MOIC: 2.2633x (should equal market return^beta)
+
+Investment #5: Ensighten
+  Entry: 2011-12-22, Exit: 2012-12-21, Days: 365
+  Original Total MOIC: 0.0000x, IRR: -99.99%
+  Alpha MOIC: 0.0000x, IRR: -100.00%
+  Implied Beta MOIC: N/A (alpha MOIC is zero)
+
+====================================================================================================
+                            ROOT CAUSE #2: DOUBLE-COUNTING OF FEES/COSTS                            
+====================================================================================================
+
+Checking financial engineering parameters from config...
+  Leverage rate: 0.00%
+  Cost of capital: 8.00%
+  Management fee rate: 2.00%
+  Carry rate: 20.00%
+  Hurdle rate: 8.00%
+
+================================================================================
+CODE AUDIT: Where are fees applied?
+================================================================================
+
+1. decompose_historical_beta() in data_import.py:
+   OK - CORRECT: Does NOT apply fees - strips beta from historical total returns
+   OK - CORRECT: Historical returns should already be gross (before fees)
+
+2. run_monte_carlo_simulation() with apply_costs=False (alpha simulation):
+   OK - CORRECT: Should NOT apply fees when apply_costs=False
+   ? TO VERIFY: Check that alpha simulation is called with apply_costs=False
+
+3. reconstruct_gross_performance() in reconstruction.py:
+   OK - CORRECT: Should NOT apply fees - only combines alpha × beta
+
+4. reconstruct_net_performance() in reconstruction.py:
+   OK - CORRECT: Should ONLY apply fees here (final stage)
+
+================================================================================
+RECOMMENDATION: Check app.py to verify apply_costs=False for alpha simulation
+================================================================================
+
+====================================================================================================
+                                ROOT CAUSE #3: TIME PERIOD MISMATCH                                 
+====================================================================================================
+
+Analyzing date alignment for sample investments...
+
+================================================================================
+DATE ALIGNMENT CHECK (First 5 investments)
+================================================================================
+
+Investment #1: Alibaba Group
+  Entry date: 2011-04-20
+  Exit date: 2015-03-23
+  Holding period: 1433 days (3.92 years)
+  Entry date in beta index: NO (interpolated)
+  Exit date in beta index: NO (interpolated)
+
+Investment #2: Bazaarvoice
+  Entry date: 2011-07-20
+  Exit date: 2014-09-10
+  Holding period: 1148 days (3.14 years)
+  Entry date in beta index: NO (interpolated)
+  Exit date in beta index: NO (interpolated)
+
+Investment #3: Branding Brand
+  Entry date: 2012-08-31
+  Exit date: 2021-04-19
+  Holding period: 3153 days (8.63 years)
+  Entry date in beta index: NO (interpolated)
+  Exit date in beta index: NO (interpolated)
+
+Investment #4: DrillingInfo
+  Entry date: 2012-02-29
+  Exit date: 2018-07-14
+  Holding period: 2327 days (6.37 years)
+  Entry date in beta index: NO (interpolated)
+  Exit date in beta index: NO (interpolated)
+
+Investment #5: Ensighten
+  Entry date: 2011-12-22
+  Exit date: 2012-12-21
+  Holding period: 365 days (1.00 years)
+  Entry date in beta index: NO (interpolated)
+  Exit date in beta index: NO (interpolated)
+
+================================================================================
+BETA INDEX FREQUENCY ANALYSIS
+================================================================================
+First 10 date intervals (days): [90, 91, 92, 92, 91, 91, 92, 92, 90, 91]
+Average interval: 91.2 days
+Frequency: quarterly
+
+====================================================================================================
+                              RUNNING ALPHA SIMULATION FOR DIAGNOSTICS                              
+====================================================================================================
+
+Running alpha simulation with apply_costs=False...
+OK - Completed 1000 alpha simulations
+
+====================================================================================================
+                              ROOT CAUSE #4: STATISTICAL SAMPLING BIAS                              
+====================================================================================================
+
+Comparing alpha investment universe vs simulated alpha results...
+
+================================================================================
+ALPHA DISTRIBUTION: Input Universe vs Simulation Results
+================================================================================
+
+Input universe: 107 investments
+Simulation results: 1000 portfolios
+Simulations per portfolio: mean=10.0, std=2.0
+
+Metric                         Input Universe       Simulation Results   Difference          
+------------------------------------------------------------------------------------------
+Mean MOIC                                   1.5300              1.0672             -0.4628
+Median MOIC                                 1.2261              1.0238             -0.2022
+Std Dev MOIC                                1.2425              0.2768             -0.9657
+Min MOIC                                    0.0000              0.4086             +0.4086
+Max MOIC                                    8.5988              2.3494             -6.2494
+
+Mean IRR                                   15.60%              1.75%            -13.85%
+Median IRR                                  8.03%              0.91%             -7.12%
+Std Dev IRR                                38.32%              9.12%            -29.20%
+
+================================================================================
+SAMPLING BIAS ANALYSIS
+================================================================================
+Traceback (most recent call last):
+  File "C:\Users\ZacharyMatula\Code Projects\Private Fund Simulation\fund_simulation\diagnose_alpha_accuracy.py", line 560, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\ZacharyMatula\Code Projects\Private Fund Simulation\fund_simulation\diagnose_alpha_accuracy.py", line 479, in main
+    result_4 = diagnose_root_cause_4_sampling_bias(
+        alpha_results,
+        result_1['alpha_investments'],
+        config
+    )
+  File "C:\Users\ZacharyMatula\Code Projects\Private Fund Simulation\fund_simulation\diagnose_alpha_accuracy.py", line 300, in diagnose_root_cause_4_sampling_bias
+    print(f"\u26a0\ufe0f WARNING: Simulation mean differs from input mean by {mean_moic_diff:+.4f}")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.13_3.13.2544.0_x64__qbz5n2kfra8p0\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode characters in position 0-1: character maps to <undefined>
