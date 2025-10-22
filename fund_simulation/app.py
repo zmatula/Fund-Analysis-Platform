@@ -71,10 +71,9 @@ def main():
         st.session_state.decomp_diagnostics = None
 
     # Create tabs
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3 = st.tabs([
         "📁 Data Import",
-        "⚙️ Configuration",
-        "▶️ Run Simulation",
+        "⚙️ Configuration & Run",
         "📈 Results"
     ])
 
@@ -85,9 +84,6 @@ def main():
         render_configuration()
 
     with tab3:
-        render_run_simulation()
-
-    with tab4:
         render_results()
 
 
@@ -95,7 +91,7 @@ def render_data_import():
     st.header("Import Historical Investment Data")
 
     st.markdown("""
-    **CSV Format** (NO headers):
+    **File Format** (CSV or Excel, with or without headers):
     - Column 1: Investment Name
     - Column 2: Fund Name
     - Column 3: Entry Date (YYYY-MM-DD, MM/DD/YYYY, DD/MM/YYYY, or YYYY/MM/DD)
@@ -107,17 +103,23 @@ def render_data_import():
     """)
 
     uploaded_file = st.file_uploader(
-        "Upload CSV file",
-        type=['csv'],
-        help="CSV format: investment_name, fund_name, entry_date, MOIC, IRR"
+        "Upload Investment Data (CSV or Excel)",
+        type=['csv', 'xlsx', 'xls'],
+        help="Supported formats: CSV, Excel (.xlsx, .xls). Headers are auto-detected."
     )
 
     if uploaded_file is not None:
-        # Parse CSV directly from buffer (no temp file needed)
-        csv_content = StringIO(uploaded_file.getvalue().decode('utf-8'))
+        # Check file type and parse accordingly
+        from io import BytesIO
 
-        # Parse CSV
-        investments, errors = parse_csv_file(csv_content)
+        if uploaded_file.name.endswith(('.xlsx', '.xls')):
+            # Excel file - pass BytesIO buffer to parser with explicit file type
+            file_buffer = BytesIO(uploaded_file.getvalue())
+            investments, errors = parse_csv_file(file_buffer, file_type='excel')
+        else:
+            # CSV file - decode as UTF-8 and create StringIO
+            csv_content = StringIO(uploaded_file.getvalue().decode('utf-8'))
+            investments, errors = parse_csv_file(csv_content, file_type='csv')
 
         if errors:
             st.error(f"Found {len(errors)} error(s) during import:")
@@ -154,7 +156,7 @@ def render_data_import():
     st.markdown("""
     **Beta pricing data enables "alpha" simulations that measure excess returns above a benchmark.**
 
-    **CSV Format** (2 columns, with or without headers):
+    **File Format** (CSV or Excel, with or without headers):
     - Column 1: Date (YYYY-MM-DD, MM/DD/YYYY, etc.)
     - Column 2: Price (numeric)
 
@@ -167,18 +169,24 @@ def render_data_import():
     """)
 
     beta_uploaded_file = st.file_uploader(
-        "Upload Beta Prices CSV",
-        type=['csv'],
+        "Upload Beta Prices (CSV or Excel)",
+        type=['csv', 'xlsx', 'xls'],
         key="beta_uploader",
-        help="CSV with date and price columns"
+        help="Supported formats: CSV, Excel (.xlsx, .xls). Headers are auto-detected."
     )
 
     if beta_uploaded_file is not None:
-        # Parse CSV directly from buffer (no temp file needed)
-        beta_csv_content = StringIO(beta_uploaded_file.getvalue().decode('utf-8'))
+        # Check file type and parse accordingly
+        from io import BytesIO
 
-        # Parse CSV
-        beta_prices, beta_errors, detected_freq = parse_beta_csv(beta_csv_content)
+        if beta_uploaded_file.name.endswith(('.xlsx', '.xls')):
+            # Excel file - pass BytesIO buffer to parser with explicit file type
+            beta_file_buffer = BytesIO(beta_uploaded_file.getvalue())
+            beta_prices, beta_errors, detected_freq = parse_beta_csv(beta_file_buffer, file_type='excel')
+        else:
+            # CSV file - decode as UTF-8 and create StringIO
+            beta_csv_content = StringIO(beta_uploaded_file.getvalue().decode('utf-8'))
+            beta_prices, beta_errors, detected_freq = parse_beta_csv(beta_csv_content, file_type='csv')
 
         if beta_errors:
             st.error(f"Found {len(beta_errors)} error(s) in beta data:")
@@ -226,8 +234,95 @@ def render_data_import():
             if len(beta_prices) > 10:
                 st.text(f"... and {len(beta_prices) - 10} more prices")
 
+            # Beta Extrapolation Settings
+            with st.expander("⚙️ Advanced: Beta Extrapolation Settings", expanded=False):
+                st.markdown("""
+                **Beta Extrapolation** allows you to extend beta data beyond the CSV range for alpha decomposition.
+
+                **IMPORTANT:** Extrapolation is used ONLY for historical alpha decomposition when investment
+                dates fall outside beta data coverage. Forward simulations always use real data only.
+                """)
+
+                extrap_enabled = st.checkbox(
+                    "Enable Beta Extrapolation",
+                    value=False,
+                    help="Allow investments with dates outside beta data range to be included in alpha decomposition"
+                )
+
+                if extrap_enabled:
+                    st.info("ℹ️ Extrapolation enabled: Investments outside beta range will use extrapolated prices for decomposition only")
+
+                    extrap_method = st.selectbox(
+                        "Extrapolation Method",
+                        options=["average_return", "flat", "custom_return"],
+                        index=0,
+                        help="average_return: Continue historical return rate, flat: No return (constant price), custom_return: User-specified return rate"
+                    )
+
+                    # Method descriptions
+                    if extrap_method == "average_return":
+                        st.caption("📈 **Average Return**: Extrapolates using the geometric average return from real data")
+                    elif extrap_method == "flat":
+                        st.caption("➡️ **Flat**: Keeps price constant (0% return) before/after data range")
+                    elif extrap_method == "custom_return":
+                        st.caption("✏️ **Custom Return**: Use your own assumed annual return rate")
+
+                    custom_annual_return = None
+                    if extrap_method == "custom_return":
+                        custom_annual_return = st.slider(
+                            "Custom Annual Return (%)",
+                            min_value=-50.0,
+                            max_value=100.0,
+                            value=10.0,
+                            step=1.0,
+                            help="Annual return rate to use for extrapolation"
+                        ) / 100
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        backward_years = st.slider(
+                            "Max Backward Years",
+                            min_value=1,
+                            max_value=30,
+                            value=10,
+                            help="Maximum years to extrapolate before first data point"
+                        )
+                    with col2:
+                        forward_years = st.slider(
+                            "Max Forward Years",
+                            min_value=1,
+                            max_value=30,
+                            value=10,
+                            help="Maximum years to extrapolate after last data point"
+                        )
+                else:
+                    extrap_method = "average_return"
+                    custom_annual_return = None
+                    backward_years = 10
+                    forward_years = 10
+
+            # Create extrapolation config if enabled
+            extrap_config = None
+            if extrap_enabled:
+                from fund_simulation.models import BetaExtrapolationConfig
+                extrap_config = BetaExtrapolationConfig(
+                    enabled=True,
+                    method=extrap_method,
+                    custom_annual_return=custom_annual_return,
+                    backward_years=backward_years,
+                    forward_years=forward_years
+                )
+
+                # Validate config
+                config_errors = extrap_config.validate()
+                if config_errors:
+                    st.error("⚠️ Extrapolation configuration errors:")
+                    for error in config_errors:
+                        st.error(f"- {error}")
+                    extrap_config = None  # Disable if invalid
+
             # Create beta index
-            beta_index = create_beta_index(beta_prices, user_frequency)
+            beta_index = create_beta_index(beta_prices, user_frequency, extrapolation_config=extrap_config)
 
             # Validate coverage if we have investments
             if st.session_state.investments is not None:
@@ -361,16 +456,18 @@ def render_configuration():
         col1, col2 = st.columns(2)
 
         with col1:
-            beta_outlook = st.selectbox(
-                "Return Outlook",
-                options=["pessimistic", "base", "optimistic"],
-                index=1,
-                help="Pessimistic = hist -10%, Base = historical, Optimistic = hist +10%"
-            )
+            beta_outlook_modifier = st.slider(
+                "Return Outlook Modifier (%)",
+                min_value=-50.0,
+                max_value=50.0,
+                value=0.0,
+                step=0.5,
+                help="Additive adjustment to historical return. Example: -6% means target = historical - 6%, +3.5% means target = historical + 3.5%"
+            ) / 100  # Convert percentage to decimal
 
         with col2:
             beta_confidence = st.selectbox(
-                "Volatility Confidence",
+                "Confidence Interval",
                 options=["low", "medium", "high"],
                 index=1,
                 help="Low = 1.5× historical vol, Medium = 1.0× historical vol, High = 0.5× historical vol"
@@ -381,6 +478,27 @@ def render_configuration():
             n_beta_obs = len(st.session_state.beta_index.prices)
             if n_beta_obs < 36:
                 st.warning(f"⚠️ Beta data has only {n_beta_obs} observations. Recommend at least 36 for stable estimates.")
+
+            # Display beta extrapolation settings if enabled
+            if st.session_state.beta_index.extrapolation_config is not None and st.session_state.beta_index.extrapolation_config.enabled:
+                st.markdown("---")
+                st.markdown("**Beta Extrapolation Status:**")
+                extrap = st.session_state.beta_index.extrapolation_config
+
+                st.info(f"""
+                ✅ **Extrapolation Enabled**
+                - Method: **{extrap.method.replace('_', ' ').title()}**
+                {f"- Custom Return: **{extrap.custom_annual_return:.2%}**" if extrap.method == "custom_return" else ""}
+                - Max Backward: **{extrap.backward_years} years**
+                - Max Forward: **{extrap.forward_years} years**
+
+                Extrapolation is used ONLY for alpha decomposition when investment dates fall outside beta data range.
+                Forward simulations always use real data only.
+                """)
+            else:
+                st.markdown("---")
+                st.markdown("**Beta Extrapolation Status:**")
+                st.warning("⚠️ Extrapolation disabled. Investments with dates outside beta data range will be skipped in alpha decomposition.")
 
     # Create configuration
     config = SimulationConfiguration(
@@ -396,7 +514,7 @@ def render_configuration():
         investment_count_std=investment_count_std,
         beta_horizon_days=int(beta_horizon_days),
         beta_n_paths=int(beta_n_paths),
-        beta_outlook=beta_outlook,
+        beta_outlook_modifier=beta_outlook_modifier,
         beta_confidence=beta_confidence
     )
 
@@ -410,185 +528,176 @@ def render_configuration():
         st.success("✓ Configuration is valid")
         st.session_state.config = config
 
+        # Run Simulation Section (only show if config is valid)
+        st.markdown("---")
+        st.header("Run Monte Carlo Simulation")
 
-def render_run_simulation():
-    st.header("Run Monte Carlo Simulation")
+        investments = st.session_state.investments
 
-    if st.session_state.investments is None:
-        st.warning("⚠️ Please import data first")
-        return
+        st.info(f"Ready to run {config.simulation_count:,} simulations with {len(investments)} investments")
 
-    if st.session_state.config is None:
-        st.warning("⚠️ Please configure simulation parameters")
-        return
+        # Option to export detailed data
+        export_details = st.checkbox(
+            "Export detailed investment and cash flow data for CSV analysis",
+            value=st.session_state.export_details,
+            help="Enable this to generate CSV files with investment-level details and cash flow schedules. This will use more memory."
+        )
+        st.session_state.export_details = export_details
 
-    config = st.session_state.config
-    investments = st.session_state.investments
+        if st.button("▶️ Run Simulation", type="primary"):
+            # Progress bar
+            progress_bar = st.progress(0)
+            status_text = st.empty()
 
-    st.info(f"Ready to run {config.simulation_count:,} simulations with {len(investments)} investments")
+            def update_progress(fraction):
+                progress_bar.progress(fraction)
+                status_text.text(f"Progress: {fraction*100:.1f}%")
 
-    # Option to export detailed data
-    export_details = st.checkbox(
-        "Export detailed investment and cash flow data for CSV analysis",
-        value=st.session_state.export_details,
-        help="Enable this to generate CSV files with investment-level details and cash flow schedules. This will use more memory."
-    )
-    st.session_state.export_details = export_details
+            # Run simulation - 4-stage analysis
+            # Check that beta data is available
+            if st.session_state.beta_index is None:
+                st.error("⚠️ Beta price data is required for simulation. Please upload beta data in the Data Import tab.")
+                progress_bar.empty()
+                status_text.empty()
+                return
 
-    if st.button("▶️ Run Simulation", type="primary"):
-        # Progress bar
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+            # Stage 0: Beta Decomposition
+            status_text.text("Stage 0/4: Decomposing historical beta from deals...")
+            with st.spinner("Stage 0/4: Decomposing historical beta..."):
+                from fund_simulation.data_import import decompose_historical_beta
 
-        def update_progress(fraction):
-            progress_bar.progress(fraction)
-            status_text.text(f"Progress: {fraction*100:.1f}%")
+                # Strip historical beta to get alpha-only returns
+                alpha_investments, decomp_diagnostics = decompose_historical_beta(
+                    investments,
+                    st.session_state.beta_index,
+                    beta_exposure=config.beta_exposure,
+                    verbose=True  # Print diagnostic table
+                )
 
-        # Run simulation - 4-stage analysis
-        # Check that beta data is available
-        if st.session_state.beta_index is None:
-            st.error("⚠️ Beta price data is required for simulation. Please upload beta data in the Data Import tab.")
+                # Store decomposition diagnostics
+                st.session_state.decomp_diagnostics = decomp_diagnostics
+
+                # Use alpha-only investments for simulation
+                investments_for_alpha_sim = alpha_investments
+
+                st.success(f"✓ Stage 0: Decomposed {len(alpha_investments)} investments (Mean historical beta IRR: {decomp_diagnostics['mean_beta_irr']:.2%})")
+
+            # Stage 1: Alpha Simulation
+            progress_bar.progress(0)
+            status_text.text("Stage 1/4: Running alpha simulation (excess returns)...")
+            with st.spinner("Stage 1/4: Running alpha simulation (excess returns)..."):
+                alpha_results = run_monte_carlo_simulation(
+                    investments_for_alpha_sim,
+                    config,
+                    progress_callback=update_progress,
+                    beta_index=st.session_state.beta_index,
+                    export_details=True,  # Required for reconstruction (forced regardless of checkbox)
+                    apply_costs=False,  # No costs for alpha
+                    use_alpha=True  # Calculate alpha (excess) returns
+                )
+            alpha_summary = calculate_summary_statistics(alpha_results, config)
+
+            # Stage 2: Beta Forward Simulation
+            progress_bar.progress(0)
+            status_text.text("Stage 2/4: Running beta forward simulation...")
+
+            with st.spinner("Stage 2/4: Running beta forward simulation (constant-growth method)..."):
+                try:
+                    beta_paths, beta_diagnostics = simulate_beta_forward(
+                        st.session_state.beta_index,
+                        config.beta_horizon_days,
+                        config.beta_n_paths,
+                        seed=42,
+                        outlook_modifier=config.beta_outlook_modifier,
+                        confidence=config.beta_confidence
+                    )
+                    progress_bar.progress(1.0)
+                    st.session_state.beta_paths = beta_paths
+                    st.session_state.beta_diagnostics = beta_diagnostics
+
+                    st.success(f"✓ Stage 2: Generated {config.beta_n_paths} beta paths over {config.beta_horizon_days} trading days")
+                except Exception as e:
+                    st.error(f"⚠️ Beta simulation failed: {str(e)}")
+                    st.session_state.beta_paths = None
+                    st.session_state.beta_diagnostics = None
+
+            # Stage 3: Gross Performance Reconstruction
+            if st.session_state.beta_paths is not None:
+                progress_bar.progress(0)
+                status_text.text("Stage 3/4: Reconstructing gross performance...")
+                with st.spinner("Stage 3/4: Reconstructing gross performance (alpha × beta)..."):
+                    try:
+                        # Need a random state for selecting beta paths
+                        random_state_recon = np.random.RandomState(seed=42)
+
+                        # Get original returns lookup from decomposition diagnostics
+                        original_returns_lookup = None
+                        if st.session_state.decomp_diagnostics:
+                            original_returns_lookup = st.session_state.decomp_diagnostics.get('original_returns_lookup')
+
+                        reconstructed_gross_results, beta_recon_diagnostics = reconstruct_gross_performance(
+                            alpha_results,
+                            st.session_state.beta_paths,
+                            st.session_state.beta_paths.index[0],
+                            config,
+                            random_state_recon,
+                            original_returns_lookup
+                        )
+
+                        reconstructed_gross_summary = calculate_summary_statistics(reconstructed_gross_results, config)
+
+                        progress_bar.progress(1.0)
+                        st.session_state.reconstructed_gross_results = reconstructed_gross_results
+                        st.session_state.reconstructed_gross_summary = reconstructed_gross_summary
+                        st.session_state.beta_recon_diagnostics = beta_recon_diagnostics
+                        st.success(f"✓ Stage 3: Reconstructed {len(reconstructed_gross_results):,} gross performance simulations")
+
+                    except Exception as e:
+                        st.error(f"⚠️ Gross reconstruction failed: {str(e)}")
+                        st.session_state.reconstructed_gross_results = None
+                        st.session_state.reconstructed_gross_summary = None
+            else:
+                st.warning("⚠️ Stage 3 skipped: Beta simulation failed")
+                st.session_state.reconstructed_gross_results = None
+                st.session_state.reconstructed_gross_summary = None
+
+            # Stage 4: Net Performance Reconstruction
+            if st.session_state.reconstructed_gross_results is not None:
+                progress_bar.progress(0)
+                status_text.text("Stage 4/4: Reconstructing net performance...")
+                with st.spinner("Stage 4/4: Reconstructing net performance (applying costs)..."):
+                    try:
+                        reconstructed_net_results = reconstruct_net_performance(
+                            st.session_state.reconstructed_gross_results,
+                            config
+                        )
+
+                        reconstructed_net_summary = calculate_summary_statistics(reconstructed_net_results, config)
+
+                        progress_bar.progress(1.0)
+                        st.session_state.reconstructed_net_results = reconstructed_net_results
+                        st.session_state.reconstructed_net_summary = reconstructed_net_summary
+                        st.success(f"✓ Stage 4: Reconstructed {len(reconstructed_net_results):,} net performance simulations")
+
+                    except Exception as e:
+                        st.error(f"⚠️ Net reconstruction failed: {str(e)}")
+                        st.session_state.reconstructed_net_results = None
+                        st.session_state.reconstructed_net_summary = None
+            else:
+                st.warning("⚠️ Stage 4 skipped: Gross reconstruction failed")
+                st.session_state.reconstructed_net_results = None
+                st.session_state.reconstructed_net_summary = None
+
+            # Store alpha results
+            st.session_state.alpha_results = alpha_results
+            st.session_state.alpha_summary = alpha_summary
+
+            progress_bar.progress(1.0)
+            status_text.text("✓ Completed all stages")
+            st.success(f"✓ Completed simulation successfully")
+
             progress_bar.empty()
             status_text.empty()
-            return
-
-        # Stage 0: Beta Decomposition
-        status_text.text("Stage 0/4: Decomposing historical beta from deals...")
-        with st.spinner("Stage 0/4: Decomposing historical beta..."):
-            from fund_simulation.data_import import decompose_historical_beta
-
-            # Strip historical beta to get alpha-only returns
-            alpha_investments, decomp_diagnostics = decompose_historical_beta(
-                investments,
-                st.session_state.beta_index,
-                beta_exposure=config.beta_exposure,
-                verbose=True  # Print diagnostic table
-            )
-
-            # Store decomposition diagnostics
-            st.session_state.decomp_diagnostics = decomp_diagnostics
-
-            # Use alpha-only investments for simulation
-            investments_for_alpha_sim = alpha_investments
-
-            st.success(f"✓ Stage 0: Decomposed {len(alpha_investments)} investments (Mean historical beta IRR: {decomp_diagnostics['mean_beta_irr']:.2%})")
-
-        # Stage 1: Alpha Simulation
-        progress_bar.progress(0)
-        status_text.text("Stage 1/4: Running alpha simulation (excess returns)...")
-        with st.spinner("Stage 1/4: Running alpha simulation (excess returns)..."):
-            alpha_results = run_monte_carlo_simulation(
-                investments_for_alpha_sim,
-                config,
-                progress_callback=update_progress,
-                beta_index=st.session_state.beta_index,
-                export_details=True,  # Required for reconstruction (forced regardless of checkbox)
-                apply_costs=False,  # No costs for alpha
-                use_alpha=True  # Calculate alpha (excess) returns
-            )
-        alpha_summary = calculate_summary_statistics(alpha_results, config)
-
-        # Stage 2: Beta Forward Simulation
-        progress_bar.progress(0)
-        status_text.text("Stage 2/4: Running beta forward simulation...")
-
-        with st.spinner("Stage 2/4: Running beta forward simulation (constant-growth method)..."):
-            try:
-                beta_paths, beta_diagnostics = simulate_beta_forward(
-                    st.session_state.beta_index,
-                    config.beta_horizon_days,
-                    config.beta_n_paths,
-                    seed=42,
-                    outlook=config.beta_outlook,
-                    confidence=config.beta_confidence
-                )
-                progress_bar.progress(1.0)
-                st.session_state.beta_paths = beta_paths
-                st.session_state.beta_diagnostics = beta_diagnostics
-
-                st.success(f"✓ Stage 2: Generated {config.beta_n_paths} beta paths over {config.beta_horizon_days} trading days")
-            except Exception as e:
-                st.error(f"⚠️ Beta simulation failed: {str(e)}")
-                st.session_state.beta_paths = None
-                st.session_state.beta_diagnostics = None
-
-        # Stage 3: Gross Performance Reconstruction
-        if st.session_state.beta_paths is not None:
-            progress_bar.progress(0)
-            status_text.text("Stage 3/4: Reconstructing gross performance...")
-            with st.spinner("Stage 3/4: Reconstructing gross performance (alpha × beta)..."):
-                try:
-                    # Need a random state for selecting beta paths
-                    random_state_recon = np.random.RandomState(seed=42)
-
-                    # Get original returns lookup from decomposition diagnostics
-                    original_returns_lookup = None
-                    if st.session_state.decomp_diagnostics:
-                        original_returns_lookup = st.session_state.decomp_diagnostics.get('original_returns_lookup')
-
-                    reconstructed_gross_results, beta_recon_diagnostics = reconstruct_gross_performance(
-                        alpha_results,
-                        st.session_state.beta_paths,
-                        st.session_state.beta_paths.index[0],
-                        config,
-                        random_state_recon,
-                        original_returns_lookup
-                    )
-
-                    reconstructed_gross_summary = calculate_summary_statistics(reconstructed_gross_results, config)
-
-                    progress_bar.progress(1.0)
-                    st.session_state.reconstructed_gross_results = reconstructed_gross_results
-                    st.session_state.reconstructed_gross_summary = reconstructed_gross_summary
-                    st.session_state.beta_recon_diagnostics = beta_recon_diagnostics
-                    st.success(f"✓ Stage 3: Reconstructed {len(reconstructed_gross_results):,} gross performance simulations")
-
-                except Exception as e:
-                    st.error(f"⚠️ Gross reconstruction failed: {str(e)}")
-                    st.session_state.reconstructed_gross_results = None
-                    st.session_state.reconstructed_gross_summary = None
-        else:
-            st.warning("⚠️ Stage 3 skipped: Beta simulation failed")
-            st.session_state.reconstructed_gross_results = None
-            st.session_state.reconstructed_gross_summary = None
-
-        # Stage 4: Net Performance Reconstruction
-        if st.session_state.reconstructed_gross_results is not None:
-            progress_bar.progress(0)
-            status_text.text("Stage 4/4: Reconstructing net performance...")
-            with st.spinner("Stage 4/4: Reconstructing net performance (applying costs)..."):
-                try:
-                    reconstructed_net_results = reconstruct_net_performance(
-                        st.session_state.reconstructed_gross_results,
-                        config
-                    )
-
-                    reconstructed_net_summary = calculate_summary_statistics(reconstructed_net_results, config)
-
-                    progress_bar.progress(1.0)
-                    st.session_state.reconstructed_net_results = reconstructed_net_results
-                    st.session_state.reconstructed_net_summary = reconstructed_net_summary
-                    st.success(f"✓ Stage 4: Reconstructed {len(reconstructed_net_results):,} net performance simulations")
-
-                except Exception as e:
-                    st.error(f"⚠️ Net reconstruction failed: {str(e)}")
-                    st.session_state.reconstructed_net_results = None
-                    st.session_state.reconstructed_net_summary = None
-        else:
-            st.warning("⚠️ Stage 4 skipped: Gross reconstruction failed")
-            st.session_state.reconstructed_net_results = None
-            st.session_state.reconstructed_net_summary = None
-
-        # Store alpha results
-        st.session_state.alpha_results = alpha_results
-        st.session_state.alpha_summary = alpha_summary
-
-        progress_bar.progress(1.0)
-        status_text.text("✓ Completed all stages")
-        st.success(f"✓ Completed simulation successfully")
-
-        progress_bar.empty()
-        status_text.empty()
 
 
 def render_results():
@@ -815,7 +924,7 @@ def render_performance_results():
 
         with col3:
             st.markdown("**Forward View**")
-            st.metric("Outlook", beta_diag['outlook'].capitalize())
+            st.metric("Outlook Modifier", f"{beta_diag['outlook_modifier']:.2%}")
             st.metric("Confidence", beta_diag['confidence'].capitalize())
             st.metric("Target Return", f"{beta_diag['R_view']:.2%}")
 
@@ -1055,24 +1164,6 @@ def render_performance_results():
             st.markdown("**Percentiles**")
             st.metric("5th", f"{net_summary.percentile_5_moic:.2f}x / {net_summary.percentile_5_irr:.2%}")
             st.metric("95th", f"{net_summary.percentile_95_moic:.2f}x / {net_summary.percentile_95_irr:.2%}")
-
-        # Cost breakdown
-        st.markdown("#### Cost Breakdown")
-        col1, col2, col3, col4 = st.columns(4)
-
-        avg_fees = sum(r.fees_paid for r in net_results) / len(net_results)
-        avg_carry = sum(r.carry_paid for r in net_results) / len(net_results)
-        avg_leverage = sum(r.leverage_cost for r in net_results) / len(net_results)
-        avg_gross_profit = sum(r.gross_profit for r in net_results) / len(net_results)
-
-        with col1:
-            st.metric("Avg Gross Profit", f"${avg_gross_profit:,.0f}")
-        with col2:
-            st.metric("Avg Mgmt Fees", f"${avg_fees:,.0f}")
-        with col3:
-            st.metric("Avg Carry", f"${avg_carry:,.0f}")
-        with col4:
-            st.metric("Avg Leverage Cost", f"${avg_leverage:,.0f}")
 
         # Net distribution plots
         st.markdown("#### Net Distribution Plots")
